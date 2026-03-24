@@ -21,6 +21,69 @@
     color: #ccc;
   }
 
+  .zoom-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: calc(100vh - 80px);
+    overflow: hidden;
+    cursor: default;
+  }
+
+  .zoom-wrapper.is-panning {
+    cursor: grab;
+  }
+
+  .zoom-wrapper.is-panning:active {
+    cursor: grabbing;
+  }
+
+  .exit-zoom-btn {
+    position: absolute;
+    top: 16px;
+    left: 50%;
+    transform: translateX(-50%) translateY(-8px);
+    background: rgba(20, 20, 24, 0.85);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255,255,255,0.12);
+    color: #ddd;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0.3px;
+    padding: 8px 20px;
+    border-radius: 20px;
+    cursor: pointer;
+    z-index: 100;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s, transform 0.25s, background 0.15s;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+  }
+
+  .exit-zoom-btn.visible {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateX(-50%) translateY(0);
+  }
+
+  .exit-zoom-btn:hover {
+    background: rgba(40, 40, 48, 0.95);
+    color: #fff;
+  }
+
+  .exit-zoom-btn svg {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+  }
+
   .flipbook-container {
     perspective: 2400px;
     display: flex;
@@ -30,6 +93,9 @@
     width: 100%;
     max-width: 1000px;
     padding: 20px;
+    transition: transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    transform-origin: center center;
+    will-change: transform;
   }
 
   .book {
@@ -290,6 +356,21 @@
     cursor: default;
   }
 
+  .controls-divider {
+    width: 1px;
+    height: 20px;
+    background: rgba(255,255,255,0.12);
+  }
+
+  .zoom-level {
+    font-size: 12px;
+    letter-spacing: 0.3px;
+    color: #666;
+    min-width: 40px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+
   /* Ambient glow behind book */
   .book::before {
     content: '';
@@ -309,18 +390,30 @@
 </head>
 <body>
 
-<div class="flipbook-container">
+<div class="zoom-wrapper" id="zoomWrapper">
+<button class="exit-zoom-btn" id="exitZoomBtn">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/>
+  </svg>
+  Exit Zoom
+</button>
+<div class="flipbook-container" id="flipbookContainer">
   <div class="book" id="book">
     <!-- Spreads will be injected by JS -->
   </div>
   <div class="nav-area nav-left" id="navLeft" title="Previous page"></div>
   <div class="nav-area nav-right" id="navRight" title="Next page"></div>
 </div>
+</div>
 
 <div class="controls">
   <button class="nav-btn" id="btnPrev" title="Previous">&#8249;</button>
   <div class="page-indicator" id="pageIndicator">Pages 1–2 of 5</div>
   <button class="nav-btn" id="btnNext" title="Next">&#8250;</button>
+  <div class="controls-divider"></div>
+  <button class="nav-btn" id="btnZoomOut" title="Zoom out (-)">&#8722;</button>
+  <div class="zoom-level" id="zoomLevel">100%</div>
+  <button class="nav-btn" id="btnZoomIn" title="Zoom in (+)">&#43;</button>
 </div>
 
 <script>
@@ -621,52 +714,34 @@ function animatePageTurn(direction, callback) {
     }, { once: true });
 
   } else {
-    // ── BACKWARD: a page unfolds from left back to right ──
-    // Think of it as the reverse of the forward flip: the page that previously
-    // folded left-to-right now unfolds right-to-left... but in reverse time.
-    // Visually: a page sitting on the LEFT lifts from the spine and swings RIGHT,
-    // revealing the previous spread's right page underneath on the right side,
-    // and the previous spread's left page is already visible on the left.
+    // ── BACKWARD: left page folds right over the current right page ──
+    // The left page lifts from the spine and swings to the right.
+    // Underneath on the left: previous spread's left page is revealed.
+    // Underneath on the right: the CURRENT right page stays visible (not the prev one).
+    // The turning page's back face shows the previous spread's right page,
+    // which only becomes visible once the page has fully landed on top of 
+    // the current right page — then the whole overlay is removed and 
+    // the previous spread (with its own right page) takes over.
     
     const prevSpread = currentSpread - 1;
     const prevEl = spreads[prevSpread];
 
-    // Underneath left: previous spread's left page
+    // Underneath left: previous spread's left page (revealed as left page lifts)
     const underLeft = document.createElement('div');
     underLeft.style.cssText = 'position:absolute;top:0;left:0;width:50%;height:100%;background:#fff;overflow:hidden;';
     const prevLeftImg = makePageImg(prevSpread * 2);
     if (prevLeftImg) underLeft.appendChild(prevLeftImg);
     overlay.appendChild(underLeft);
 
-    // Underneath right: previous spread's right page (revealed as the page swings open)
+    // Underneath right: CURRENT right page (stays in place during the animation)
     const underRight = document.createElement('div');
     underRight.style.cssText = 'position:absolute;top:0;right:0;width:50%;height:100%;background:#fff;overflow:hidden;';
-    const prevRightImg = makePageImg(prevSpread * 2 + 1);
-    if (prevRightImg) underRight.appendChild(prevRightImg);
+    const curRightImg = makePageImg(currentSpread * 2 + 1);
+    if (curRightImg) underRight.appendChild(curRightImg);
     overlay.appendChild(underRight);
 
-    // The turning page sits on the LEFT side, hinged at its RIGHT edge (the spine).
-    // It starts flat (0deg) showing the current left page, then swings to +180deg 
-    // revealing the current right page on its back (which was behind it).
-    // But actually we want the visual to be: the page peels from left toward right.
-    // So the page is positioned on the left half, transform-origin is right (spine),
-    // starts at rotateY(0) and animates to rotateY(180deg).
-    // Front face = current left page. Back face = current right page? No...
-    //
-    // Let's think in terms of what's physically happening:
-    // We're on spread [curLeft, curRight]. We want to go back to [prevLeft, prevRight].
-    // The animation should look like the curLeft page lifts and folds to the right,
-    // and underneath it we see prevRight. When fully folded, curLeft is now face-down
-    // on the right side, and its back shows prevRight... but that doesn't make sense
-    // physically either.
-    //
-    // Simplest correct mental model: the FORWARD animation took prevRight and folded
-    // it left, showing curLeft on its back. The REVERSE should take that same page
-    // (sitting on the left showing curLeft) and fold it back right, revealing prevRight.
-    //
-    // So: front = current left page (what we see now on the left)
-    //     back = previous right page (what was on the right before the forward flip)
-    
+    // The turning page: left half, hinged at spine (right edge)
+    // Starts flat showing current left page, swings to 180deg
     const turningPage = document.createElement('div');
     turningPage.style.cssText = `
       position:absolute;top:0;left:0;width:50%;height:100%;
@@ -685,7 +760,7 @@ function animatePageTurn(direction, callback) {
     front.appendChild(fShadow);
     turningPage.appendChild(front);
 
-    // Back: previous spread's right page (revealed when page lands on the right)
+    // Back: previous spread's right page (only visible once page has folded over)
     const back = document.createElement('div');
     back.style.cssText = 'position:absolute;inset:0;backface-visibility:hidden;transform:rotateY(180deg);overflow:hidden;background:#fff;';
     const backImg = makePageImg(prevSpread * 2 + 1);
@@ -701,7 +776,6 @@ function animatePageTurn(direction, callback) {
     spineShadow.className = 'spine-shadow';
     overlay.appendChild(spineShadow);
 
-    // Animate: swing from 0deg to 180deg (left page folds over to the right)
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         turningPage.style.transform = 'rotateY(180deg)';
@@ -768,6 +842,112 @@ navLeft.addEventListener('mouseleave', () => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); goNext(); }
   if (e.key === 'ArrowLeft') { e.preventDefault(); goPrev(); }
+  if ((e.key === '=' || e.key === '+') && !e.ctrlKey && !e.metaKey) { e.preventDefault(); zoomIn(); }
+  if (e.key === '-' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); zoomOut(); }
+  if (e.key === '0') { e.preventDefault(); zoomReset(); }
+});
+
+// ── Zoom ──
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 3;
+const ZOOM_STEP = 0.25;
+let zoomScale = 1;
+let panX = 0;
+let panY = 0;
+
+const container = document.getElementById('flipbookContainer');
+const zoomWrapper = document.getElementById('zoomWrapper');
+const zoomLevelEl = document.getElementById('zoomLevel');
+const exitZoomBtn = document.getElementById('exitZoomBtn');
+
+function applyZoom() {
+  if (zoomScale <= 1) { panX = 0; panY = 0; }
+  container.style.transform = `scale(${zoomScale}) translate(${panX}px, ${panY}px)`;
+  zoomLevelEl.textContent = Math.round(zoomScale * 100) + '%';
+  document.getElementById('btnZoomIn').disabled = zoomScale >= ZOOM_MAX;
+  document.getElementById('btnZoomOut').disabled = zoomScale <= ZOOM_MIN;
+  const isZoomed = zoomScale > 1;
+  zoomWrapper.classList.toggle('is-panning', isZoomed);
+  // Hide click-to-turn overlays when zoomed so dragging works on the book
+  document.getElementById('navLeft').style.display = isZoomed ? 'none' : '';
+  document.getElementById('navRight').style.display = isZoomed ? 'none' : '';
+  exitZoomBtn.classList.toggle('visible', isZoomed);
+}
+
+function zoomIn() {
+  zoomScale = Math.min(ZOOM_MAX, Math.round((zoomScale + ZOOM_STEP) * 100) / 100);
+  applyZoom();
+}
+
+function zoomOut() {
+  zoomScale = Math.max(ZOOM_MIN, Math.round((zoomScale - ZOOM_STEP) * 100) / 100);
+  applyZoom();
+}
+
+function zoomReset() {
+  zoomScale = 1; panX = 0; panY = 0;
+  applyZoom();
+}
+
+document.getElementById('btnZoomIn').addEventListener('click', zoomIn);
+document.getElementById('btnZoomOut').addEventListener('click', zoomOut);
+exitZoomBtn.addEventListener('click', zoomReset);
+zoomLevelEl.addEventListener('click', zoomReset);
+zoomLevelEl.style.cursor = 'pointer';
+zoomLevelEl.title = 'Reset zoom (0)';
+
+// Ctrl/Cmd + scroll to zoom, plain scroll to pan when zoomed
+zoomWrapper.addEventListener('wheel', (e) => {
+  if (e.ctrlKey || e.metaKey) {
+    e.preventDefault();
+    if (e.deltaY < 0) zoomIn();
+    else zoomOut();
+  } else if (zoomScale > 1) {
+    e.preventDefault();
+    panX -= e.deltaX / zoomScale;
+    panY -= e.deltaY / zoomScale;
+    container.style.transition = 'none';
+    applyZoom();
+    clearTimeout(zoomWrapper._scrollRestore);
+    zoomWrapper._scrollRestore = setTimeout(() => {
+      container.style.transition = 'transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94)';
+    }, 100);
+  }
+}, { passive: false });
+
+// Click-and-drag to pan when zoomed in
+let isPanning = false;
+let panStartX = 0;
+let panStartY = 0;
+let panStartPanX = 0;
+let panStartPanY = 0;
+
+zoomWrapper.addEventListener('mousedown', (e) => {
+  if (zoomScale <= 1) return;
+  if (e.target.closest('.nav-btn') || e.target.closest('.controls') || e.target.closest('.exit-zoom-btn')) return;
+  isPanning = true;
+  panStartX = e.clientX;
+  panStartY = e.clientY;
+  panStartPanX = panX;
+  panStartPanY = panY;
+  e.preventDefault();
+});
+
+document.addEventListener('mousemove', (e) => {
+  if (!isPanning) return;
+  const dx = (e.clientX - panStartX) / zoomScale;
+  const dy = (e.clientY - panStartY) / zoomScale;
+  panX = panStartPanX + dx;
+  panY = panStartPanY + dy;
+  container.style.transition = 'none';
+  applyZoom();
+});
+
+document.addEventListener('mouseup', () => {
+  if (isPanning) {
+    isPanning = false;
+    container.style.transition = 'transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94)';
+  }
 });
 </script>
 </body>
